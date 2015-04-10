@@ -1,7 +1,9 @@
 package git
 
 import (
+	"encoding/base64"
 	"os"
+	"path/filepath"
 
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
@@ -22,7 +24,7 @@ func (t *tokenSource) Token() (*oauth2.Token, error) {
 	return t.token, nil
 }
 
-func Push(path, content, message string) error {
+func Push(content *string, path, message string) error {
 	var err error
 
 	ts := &tokenSource{
@@ -31,17 +33,31 @@ func Push(path, content, message string) error {
 
 	tc := oauth2.NewClient(oauth2.NoContext, ts)
 
-	// Github API
 	g := github.NewClient(tc)
 	ref, _, _ := g.Git.GetRef(owner, repo, head)
 	cSHA := *(ref.Object.SHA)
 
 	com, _, _ := g.Git.GetCommit(owner, repo, cSHA)
 	tSHA := *(com.Tree.SHA)
+
+	var enc string
+	ext := filepath.Ext(path)
+	if ext == ".png" || ext == ".mp3" || ext == ".ogg" {
+		enc = "base64"
+		b64 := base64.StdEncoding.EncodeToString([]byte(*content))
+		content = &b64
+	} else {
+		enc = "utf-8"
+	}
+	blob, _, err := g.Git.CreateBlob(owner, repo, &github.Blob{
+		Content:  content,
+		Encoding: &enc,
+	})
+
 	tree, _, err := g.Git.CreateTree(owner, repo, tSHA, []github.TreeEntry{github.TreeEntry{
-		Path:    &path,
-		Mode:    &mode,
-		Content: &content,
+		Path: &path,
+		Mode: &mode,
+		SHA:  blob.SHA,
 	}})
 	if err != nil {
 		return err
