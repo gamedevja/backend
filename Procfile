@@ -1,2 +1,1 @@
 web: backend
-worker: worker
