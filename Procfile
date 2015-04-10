@@ -1,2 +1,2 @@
-web: gamedevja
+web: backend
 worker: worker
