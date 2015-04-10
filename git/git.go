@@ -55,7 +55,7 @@ func Push(path, content, message string) error {
 	cSHAn := comn.SHA
 
 	_, _, err = g.Git.UpdateRef(owner, repo, &github.Reference{
-		Ref:    &head, // Due to go-github bug
+		Ref:    ref.Ref,
 		URL:    ref.URL,
 		Object: &github.GitObject{Type: ref.Object.Type, SHA: cSHAn, URL: ref.Object.URL},
 	}, false)
