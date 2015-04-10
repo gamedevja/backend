@@ -1,2 +1,2 @@
-web: go-heroku-example
+web: gamedevja
 worker: worker
