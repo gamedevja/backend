@@ -2,50 +2,128 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
+	"html/template"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/gamedevja/backend/git"
 )
 
+const (
+	FILE_LIMIT_BYTES = 100000
+	TEXT_LIMIT       = 60
+)
+
+var templates = template.Must(template.ParseFiles("tmpl/upload.html"))
+
 func main() {
 	http.HandleFunc("/", index)
-	http.HandleFunc("/testpush", testpush)
 	fmt.Println("listening...")
 	if err := http.ListenAndServe(":"+os.Getenv("PORT"), nil); err != nil {
 		panic(err)
 	}
 }
 
-func index(res http.ResponseWriter, req *http.Request) {
-	fmt.Fprintln(res, "index")
+func gitpush(blobs []git.Blob) error {
+	loc, _ := time.LoadLocation("Japan")
+	message := "remote: " + time.Now().In(loc).String()
+	if err := git.Push(blobs, &message); err != nil {
+		return err
+	}
+	return nil
 }
 
-func testpush(w http.ResponseWriter, r *http.Request) {
-	m := image.NewRGBA(image.Rect(0, 0, 40, 40))
-	c := color.RGBA{0, 0, 0, 255}
-	draw.Draw(m, image.Rect(m.Rect.Min.X, m.Rect.Min.Y, m.Rect.Max.X, m.Rect.Max.Y), &image.Uniform{c}, image.ZP, draw.Src)
+func display(w http.ResponseWriter, tmpl string, data interface{}) {
+	d := map[string]interface{}{
+		"Message":   data,
+		"Limit":     fmt.Sprintf("(~%dkB)", FILE_LIMIT_BYTES/1000),
+		"TextLimit": fmt.Sprintf("(~%d)", TEXT_LIMIT),
+	}
+	templates.ExecuteTemplate(w, tmpl+".html", d)
+}
 
-	var b bytes.Buffer
-	if err := png.Encode(&b, m); err != nil {
-		fmt.Fprintln(w, err.Error())
-		return
-	}
-	bin := b.String()
-	if err := git.Push(&bin, "assets/testimage/40x40.png", "remote"); err != nil {
-		fmt.Fprintln(w, err.Error())
-		return
-	}
-	text := "# md\nmd sample alt\n"
-	if err := git.Push(&text, "assets/testimage/sample.md", "remote"); err != nil {
-		fmt.Fprintln(w, err.Error())
-		return
-	}
+func index(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
 
-	fmt.Fprintln(w, "done")
+	case "GET":
+		display(w, "upload", nil)
+
+	case "POST":
+		err := r.ParseMultipartForm(FILE_LIMIT_BYTES)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		fh := r.MultipartForm.File["file"][0]
+		value := r.MultipartForm.Value["text"][0]
+
+		if value == "" || len(value) > 60 {
+			http.Error(w, "inalid text", http.StatusInternalServerError)
+			return
+		}
+
+		ext := filepath.Ext(fh.Filename)
+		if ext != ".png" && ext != ".jpg" && ext != ".svg" && ext != ".gif" && ext != ".mp3" && ext != ".ogg" {
+			http.Error(w, "invalid file", http.StatusInternalServerError)
+			return
+		}
+		f, err := fh.Open()
+		defer f.Close()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		var b bytes.Buffer
+		if _, err := io.Copy(&b, f); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		content := b.String()
+
+		var blobs []git.Blob
+
+		now := fmt.Sprintf("%d", time.Now().UnixNano())
+
+		file := new(git.Blob)
+		file.Blob.Content = &content
+		file.Blob.Encoding = &git.BlobBase64Encode
+		var testpath string
+		if os.Getenv("PRODUCTION") != "true" {
+			testpath = "test/"
+		}
+		file.Path = "assets/" + testpath + "images/" + now + ext
+		blobs = append(blobs, *file)
+
+		j, err := json.Marshal(map[string]string{
+			"filepath": file.Path,
+			"text":     value,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		value = string(j)
+		text := new(git.Blob)
+		text.Blob.Content = &value
+		text.Blob.Encoding = &git.BlobUtf8Encode
+		text.Path = "assets/" + testpath + "entries/" + now + ".json"
+		blobs = append(blobs, *text)
+
+		if err = gitpush(blobs); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		display(w, "upload", "Upload successful.")
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
